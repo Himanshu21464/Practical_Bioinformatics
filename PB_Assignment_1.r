@@ -1,132 +1,179 @@
-# -----------------------STEP 1 --------------------------------
+
+######################################### STEP 1 ###########################################################
 
 
-#loading the Geoquery library to access the GEOquery database
+# loading the required library
 library(GEOquery)
-# Set the accession number for the dataset
-accession <- "GSE22845"
-# Download the dataset using getGEO function
-gse <- getGEO(accession, GSEMatrix=TRUE)
+
+# downloading the microarray dataset from GEO  [Note that downloading the dataset requires good internet connection. Poor internet connection may result in "Time out reached failure"]
+Dataset <- getGEO("GSE37250", GSEMatrix=TRUE)
 
 # Extract the expression data and sample information
-exprs_data <- exprs(gse[[1]])
-sample_info <- pData(phenoData(gse[[1]]))
+Expressed_Data <- exprs(Dataset[[1]])
 
-# View the dimensions of the expression data
-dim(exprs_data)
+write.csv(Dataset,"PB_Assignment_1.csv")
+Sample_Information <- pData(phenoData(Dataset[[1]]))
 
 
-# ----------------------STEP 2 --------------------------------
+# attributes 
+attr= attributes(Dataset[[1]])
+
+#pData
+p_data=pData(Dataset[[1]])
+
+#fData
+f_data=fData(Dataset[[1]])
+
+
+
+
+# show all the attributes in the dataset including pdata and fdata
+View(attr)
+View(p_data)
+View(f_data)
+######################################### STEP 2 ###########################################################
 
 # Load the data into R
-data <- exprs_data
-
-# Check for missing values
-sum(is.na(data))
+data <- Expressed_Data
+data <- na.omit(data) # remove rows with missing values
 
 
-# Normalize the data using quantile normalization
+# Normalization
 library(preprocessCore)
-data_norm <- normalize.quantiles(data)
+data_norm <- normalize.quantiles(data) # quantile normalization
+
 
 # Filter the data to remove low-intensity probes
 median_intensity <- apply(data_norm, 1, median)
 threshold <- median(median_intensity)
 data_filtered <- data_norm[median_intensity > threshold, ]
 
+#log transformation
+data_log <- log2(data_filtered-min(data_filtered))
+
+# Visualize the data
+hist(data_log[,1]) # histogram of expression values 
+boxplot(data_log) # boxplot of expression values for all genes  (Log transformed data)
+boxplot(data_norm) # boxplot of expression values for all genes (Normalized data)
 
 
-# Log-transform the data
-data_log <- log2(data_filtered)
+
+######################################### STEP 3 ###########################################################
 
 
+# Log transformation of data helps us in normalizing and stabalizing the data as the raw data contain a wide range of values and it is easier to compare log transformed dataset. linearize the relationships between gene expression and biological effects,
+# and improve the interpretability of changes in gene expression levels.
 
 
-# Create boxplots of the data
-par(mfrow=c(1,2))
-boxplot(data_norm, main="Raw data")
-boxplot(data_log, main="Log-transformed data")
-
-# Create a vector of sample classes (LNN or LNP)
-class <- as.factor(sample_info$characteristics_ch1.2)
-
-# Split the data into two classes based on the sample classes
-data_LNN <- data_log[,class=="LNN"]
-data_LNP <- data_log[,class=="LNP"]
-
-# View the expression data (fdata)
-head(data_log)
-
-# View the sample information (pdata)
-head(pData(phenoData(gse[[1]])))
-
-# View the feature information (fdata)
-head(featureData(gse[[1]]))
+######################################### STEP 4 ###########################################################
 
 
-# -------------------------STEP 3---------------------------------------
+#------------------------------------------T-test--------------------------------------------------
 
 
 
 
+# creating two subset based on the HIV status of the patients
+HIV_Positive<- subset(p_data, characteristics_ch1.1 == "hiv status: HIV positive")
+HIV_Positive<- subset(HIV_Positive, select = -c(characteristics_ch1))
+HIV_Positive<- na.omit(HIV_Positive)
+
+HIV_Negative<- subset(p_data, characteristics_ch1.1 == "hiv status: HIV negative")
+HIV_Negative<- subset(HIV_Negative, select = -c(characteristics_ch1))
+HIV_Negative<- na.omit(HIV_Negative)
+
+
+# creating two subset based on the  geographical location of the patients
+HP1<- HIV_Positive$characteristics_ch1.2=="geographical region: Malawi"
+HN1<- HIV_Negative$characteristics_ch1.2=="geographical region: South Africa"
 
 
 
-# ------------------------STEP 4----------------------------------------
+# performing t-test
+t_test_perform<- apply(data_log,1, function(x) t.test(x[HP1], x[HN1], na.rm = TRUE) )
+P_Values<- sapply(t_test_perform, function(x) x$p.value)
 
-# Perform t-test and log fold change analysis
-ttest <- apply(data_log, 1, function(x) t.test(x[Class=="LNN"], x[Class=="LNP"]))
-pvals <- sapply(ttest, function(x) x$p.value)
-logfc <- apply(data_log, 1, function(x) mean(x[Class=="LNN"]) - mean(x[Class=="LNP"]))
 
-# Combine results into a data frame
-results <- data.frame(GeneID = rownames(data_log),
-                      Pvalue = pvals,
-                      LogFC = logfc,
-                      stringsAsFactors = FALSE)
+#------------------------------------------Holm Correction--------------------------------------------------
+adjusted_pvalues <- p.adjust(as.vector(P_Values), method="holm")
 
-# Correct p-values using Holm's correction
-results$adj.Pvalue <- p.adjust(results$Pvalue, method="holm")
+print(t_test_perform)
+print(adjusted_pvalues)
+#------------------------------------------LOG fold change--------------------------------------------------
 
-# Create a volcano plot
+LFC <- apply(data_log, 1, function(x) mean(x[HP1]) - mean(x[HN1]))
+any(is.na(LFC))
+print(LFC)
+
+
+####################################### VOlcano Plot ###############################################
+plot(LFC, -log10(P_Values), xlab = "Log2(Fold Change)", ylab = "-log10(P-Value)", main = "Volcano Plot")
+
+# Add a horizontal line to indicate the significance threshold
+abline(h = -log10(0.05), col = "red", lty = 2)
+
+#-----------------------------------------------------------------------------------------------------------
+
+# Load the ggplot2 package
 library(ggplot2)
-ggplot(results, aes(x=LogFC, y=-log10(Pvalue))) +
-  geom_point(aes(color=ifelse(adj.Pvalue<0.05, "red", "black"))) +
-  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
-  geom_vline(xintercept=c(-1, 1), linetype="dashed") +
-  labs(x="Log Fold Change", y="-log10(P-value)", color="Adjusted P-value < 0.05") +
-  theme_bw()
 
+data_log_df <- as.data.frame(data_log)
 
-
-# ------------------------STEP 5 ----------------------------
-
-# Load the limma package
-library(limma)
-
-# Create the design matrix
-design <- model.matrix(~ Class, data=data)
-
-# Fit the linear model and perform empirical Bayes moderation
-fit <- lmFit(data, design)
-fit <- eBayes(fit)
-
-# Identify differentially expressed genes
-topTable(fit, coef=2, n=Inf)
+# Define cutoffs for significant changes
+fc_cutoff <- 1
+pval_cutoff <- 0.05
 
 # Create a volcano plot
-results <- topTable(fit, coef=2, n=Inf)
-results$logFC <- results$estimate
-results$adj.P.Val <- p.adjust(results$p.value, method="holm")
-ggplot(results, aes(x=logFC, y=-log10(p.value))) +
-  geom_point(aes(color=ifelse(adj.P.Val<0.05, "red", "black"))) +
-  geom_hline(yintercept=-log10(0.05), linetype="dashed") +
-  geom_vline(xintercept=c(-1, 1), linetype="dashed") +
-  labs(x="Log Fold Change", y="-log10(P-value)", color="Adjusted P-value < 0.05") +
-  theme_bw()
+ggplot(data_log_df, aes(x = LFC, y = -log10(P_Values))) +
+  geom_point(aes(color = ifelse(abs(LFC) > fc_cutoff & P_Values < pval_cutoff, "red", "black"))) +
+  geom_vline(xintercept = c(-fc_cutoff, fc_cutoff), linetype = "dashed", color = "grey") +
+  geom_hline(yintercept = -log10(pval_cutoff), linetype = "dashed", color = "grey") +
+  xlab("Log2 Fold Change") +
+  ylab("-log10(p-value)") +
+  ggtitle("Volcano Plot") +
+  theme_classic()
 
 
-# ----------------------STEP 6 ------------------------------
+######################################### STEP 5 ###########################################################
+
+
+hiv_pos <- sample_info$characteristics_ch1.1 == "hiv status: HIV positive"
+hiv_neg <- sample_info$characteristics_ch1.1 == "hiv status: HIV negative"
+
+# Define the experimental design matrix
+design <- model.matrix(~ 0 + factor(sample_info$characteristics_ch1.1))
+
+# Assign meaningful column names to the design matrix
+colnames(design) <- c("HIV_pos", "HIV_neg")
+
+# Fit a linear model to the data using the design matrix
+fit <- lmFit(data, design)
+
+# Define the contrasts of interest for differential expression analysis
+cont.matrix <- makeContrasts(
+  HIV_pos_vs_neg = HIV_pos - HIV_neg,
+  levels = design
+)
+
+# Empirical Bayes shrinkage of the standard errors
+fit <- eBayes(contrasts.fit(fit, cont.matrix))
+
+top.table <- topTable(fit, sort.by = "P", n = Inf)
+head(top.table, 20)
+
+
+# Save the results to a file
+write.csv(top.table, "de_results.csv", row.names = FALSE)
+
+
+# Create a volcano plot of the results
+with(top.table, plot(logFC, -log10(P.Value), pch=20, main="Volcano Plot", xlim=c(-2,2)))
+abline(h=-log10(0.05), col="red", lty=2)
+abline(v=c(-1,1), col="blue", lty=2)
+
+
+######################################### STEP 6 ###########################################################
+
 
 #I used a cutoff of adjusted p-value < 0.05 and absolute log fold change > 1 to identify differentially expressed genes. The adjusted p-value cutoff of 0.05 is a common cutoff used in many studies and it corresponds to a false discovery rate (FDR) of 5%. This means that among the genes declared significant at this cutoff, 5% of them are expected to be false positives.
 
@@ -134,71 +181,64 @@ ggplot(results, aes(x=logFC, y=-log10(p.value))) +
 
 
 
-
-# ----------------------STEP 7 ------------------------------
-
-# Load the gProfileR package for gene set enrichment analysis
-library(gProfileR)
-
-# Extract the list of differentially expressed genes
-de_genes <- results$genes[results$adj.P.Val < 0.05 & abs(results$logFC) > 1]
-
-# Perform gene set enrichment analysis using the gProfileR package
-gprofilerResults <- gprofiler(de_genes, organism="hsapiens", ordered_query=TRUE)
-
-# Print the top enriched gene sets
-head(gprofilerResults$table, 10)
+######################################### STEP 7 ###########################################################
 
 
+library(clusterProfiler)
 
-# ----------------------STEP 8 ------------------------------
+# Load the list of differentially expressed genes
+de_genes <- read.csv("de_results.csv")$gene_symbol
 
-# the different parameters used in the gene set enrichment analysis code I provided earlier:
+# Set the background gene set (e.g., all genes in the genome)
+background_genes <- read.csv("all_genes.csv")$gene_symbol
 
-# de_genes: A vector of differentially expressed genes obtained from the previous differential expression analysis. In this case, we used a cutoff of adjusted p-value < 0.05 and absolute log fold change > 1 to identify the differentially expressed genes.
+# Perform enrichment analysis using the gene ontology database
+enrich_result <- enrichGO(de_genes, universe = background_genes, keyType = "Symbol", ont = "ALL")
 
-# organism: The name of the organism database used for gene set enrichment analysis. In this case, we used hsapiens to specify the human genome database.
-
-# ordered_query: A logical value indicating whether the query list of genes (i.e., de_genes) should be ordered based on their fold changes. In this case, we set it to TRUE to order the genes based on their log fold changes.
-
-# gprofilerResults: The output object obtained from the gprofiler() function, which contains the results of gene set enrichment analysis.
-
-# The gprofiler() function provides various options for gene set enrichment analysis, including different organism databases, gene set collections, and statistical tests. By default, it uses the g:GOSt method to perform enrichment analysis and returns a table of enriched gene sets with their corresponding p-values, q-values, and other annotations.
-
-# Create a barplot of the top enriched gene sets
-barplot(gprofilerResults$table$`P-value`, names.arg=gprofilerResults$table$term, 
-        horiz=FALSE, las=2, col="darkblue", main="Top Enriched Gene Sets", 
-        xlab="Gene Set", ylab="P-value (-log10)")
-
-# Create a heatmap of the top enriched gene sets
-heatmap(gprofilerResults$AUC, col=colorRampPalette(c("white", "red"))(100), 
-        main="Top Enriched Gene Sets", xlab="Samples", ylab="Gene Sets")
+# View the top enriched terms
+head(enrich_result)
 
 
-# Plot a barplot of the top enriched gene sets
-barplot(gprofilerResults$table$Count[1:10], horiz=TRUE, names.arg=gprofilerResults$table$term[1:10], 
-        las=1, cex.names=0.8, xlab="Number of Genes", main="Top Enriched Gene Sets")
-
-# Plot a dotplot of the enriched gene sets
-dotplot(gprofilerResults$table[1:10,], title="Top Enriched Gene Sets", showSignificant=TRUE)
-
-# Plot an enrichmap of the enriched gene sets
-enrichMap(gprofilerResults$table[1:10,], main="Top Enriched Gene Sets")
+######################################### STEP 8 ###########################################################
 
 
+# 1. gene_set : Set of genes that is being tested for Enrichment Analysis. (by using KEGG pathway database)
+# 2. Universe : Set of all genes that were tested in original DEA.
+# 3. background: Set of all genes.
+# 4. Pvaluecutoff and Qvaluecutoff: cutoff for determining statistically significant enriched dataset.
+#    p-value cutoff = 0.05
+#    q-value cutoff = 0.1
+#-----------------------------------------------------------------------------------------------------------
 
-# This code creates a heatmap of the top enriched gene sets based on their area under the curve (AUC) scores. We're using the heatmap() function to create the heatmap, and specifying various parameters such as the color, title, labels, and dimensions.
+#  Bar plot to show the top 10 enriched pathways bssed on -log10(p-value)
+barplot(enrichment_results[1:10,]$pvalue, main="Top 10 Enriched Pathways",xlab="-log10(p-value)",ylab="Pathway",horiz=T)
 
-# Observations:
+# loading the ggplot2 library to draws the volcano plot
+library(ggplot2)
 
-# Gene set enrichment analysis is a powerful tool for identifying functional categories and pathways that are enriched in a set of differentially expressed genes. In this example, we performed gene set enrichment analysis on the list of differentially expressed genes obtained from the previous differential expression analysis using the gProfileR package. We visualized the results of enrichment using various plots such as barplots and heatmaps.
+# volcano plot  
 
-# Based on the results, we observed that several biological processes and pathways were significantly enriched in the differentially expressed genes, including immune response, cell cycle, and metabolic processes. These findings are consistent with the known biology of breast cancer and suggest potential targets for further investigation. However, it's important to interpret the results of gene set enrichment analysis carefully and in the context of the specific research question and study design. Additionally, further validation experiments may
+# dataframe creation for volcano plot
+volcano_df <- data.frame(Pathway = enrichment_results$pathway,logFC = enrichment_results$log2FoldChange,logP = -log10(enrichment_results$pvalue),stringsAsFactors = F)
+
+# creating the volcano plot
+ggplot(volcano_df, aes(x=logFC, y=logP)) +geom_point(alpha=0.8, size=2, aes(color=Pathway)) +scale_color_manual(values=rainbow(length(unique(enrichment_results$pathway)))+geom_vline(xintercept=c(-1,1), linetype=2, color="gray40") +geom_hline(yintercept=-log10(0.05), linetype=2, color="gray40") +theme_bw() +labs(x="log2 Fold Change", y="-log10(p-value)", color="Pathway")
+
+# library for creating heatmap
+library(pheatmap)
+
+# creating the dataframes for pheatmap 
+heatmap_df <- subset(diff_exp_data, select=de_genes)
+heatmap_df <- heatmap_df[row.names(heatmap_df) %in% enrichment_results$gene]
+
+# creating the heatmap
+pheatmap(heatmap_df, cluster_rows=F, cluster_cols=T, color = colorRampPalette(c("blue", "white", "red"))(50))
 
 
-# In these code examples, we're using various functions from the gProfileR package to plot the enriched gene sets in different formats. The barplot() function plots a horizontal barplot of the top enriched gene sets, with the number of genes in each set on the x-axis. The dotplot() function plots a dotplot of the enriched gene sets, with the significance level indicated by the color of the dots. Finally, the enrichMap() function plots an enrichmap of the enriched gene sets, with the size and color of each cell indicating the enrichment score and significance level.
-
-# Observations from the gene set enrichment analysis may depend on the specific dataset and analysis performed. In general, you may observe that certain biological pathways or processes are significantly enriched among the differentially expressed genes. These enriched gene sets may provide insights into the underlying mechanisms of the observed differential expression and may suggest potential targets for further validation or investigation. Additionally, gene set enrichment analysis can help to identify potential biomarkers or drug targets that may be used in diagnosis or treatment of the disease or condition of interest.
+######################################### STEP 9 ###########################################################
 
 
-# ------------------------------ STEP 9 ----------------------------------
+
+
+
+
